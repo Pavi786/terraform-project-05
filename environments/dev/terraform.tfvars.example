@@ -1,0 +1,5 @@
+aws_region        = "ap-southeast-1"
+project_name      = "p05-incident-mgmt"
+environment       = "dev"
+allowed_test_cidr = "10.0.0.0/16"
+instance_type     = "t3.micro"

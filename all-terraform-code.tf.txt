@@ -1,0 +1,179 @@
+###############################################################################
+# CONSOLIDATED TERRAFORM CODE: PROJECT 05 (PRODUCTION INCIDENT MANAGEMENT)
+# AWS Region: ap-southeast-1
+# Native S3 State Locking (Terraform 1.10+)
+###############################################################################
+
+# =============================================================================
+# SECTION 1: BOOTSTRAP (S3 REMOTE STATE BACKEND)
+# Path: bootstrap/main.tf
+# =============================================================================
+
+terraform {
+  required_version = ">= 1.10.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.80"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.aws_region
+
+  default_tags {
+    tags = {
+      Project     = "terraform-project-05"
+      Component   = "Backend-Bootstrap"
+      ManagedBy   = "Terraform"
+      Environment = "shared-tools"
+    }
+  }
+}
+
+data "aws_caller_identity" "current" {}
+
+locals {
+  bucket_name = "p05-tfstate-${data.aws_caller_identity.current.account_id}-${var.aws_region}"
+}
+
+resource "aws_s3_bucket" "tf_state" {
+  bucket        = local.bucket_name
+  force_destroy = false
+
+  tags = {
+    Name        = local.bucket_name
+    Purpose     = "Terraform-Remote-State"
+    Environment = "shared-tools"
+  }
+}
+
+resource "aws_s3_bucket_versioning" "tf_state" {
+  bucket = aws_s3_bucket.tf_state.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "tf_state" {
+  bucket = aws_s3_bucket.tf_state.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+    bucket_key_enabled = true
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "tf_state" {
+  bucket = aws_s3_bucket.tf_state.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# =============================================================================
+# SECTION 2: DEV ENVIRONMENT
+# Path: environments/dev/main.tf
+# =============================================================================
+
+data "aws_vpc" "default" {
+  default = true
+}
+
+data "aws_subnets" "default" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.default.id]
+  }
+}
+
+locals {
+  name_prefix = "${var.project_name}-${var.environment}"
+}
+
+# LAB 1: DRIFT DETECTION TARGET RESOURCE
+resource "aws_security_group" "app_sg" {
+  name        = "${local.name_prefix}-app-sg"
+  description = "Managed Security Group for Lab 01 - Drift Detection"
+  vpc_id      = data.aws_vpc.default.id
+
+  ingress {
+    description = "HTTPS from internal test CIDR only"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = [var.allowed_test_cidr]
+  }
+
+  egress {
+    description = "Allow outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name        = "${local.name_prefix}-app-sg"
+    Lab         = "01-drift-detection"
+    ManagedBy   = "Terraform"
+    Environment = var.environment
+  }
+}
+
+# =============================================================================
+# SECTION 3: REUSABLE EC2 MODULE
+# Path: modules/ec2/main.tf
+# =============================================================================
+
+data "aws_ami" "al2023" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["al2023-ami-2023.*-x86_64"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+
+  filter {
+    name   = "architecture"
+    values = ["x86_64"]
+  }
+}
+
+resource "aws_instance" "this" {
+  ami                         = data.aws_ami.al2023.id
+  instance_type               = var.instance_type
+  subnet_id                   = var.subnet_id
+  vpc_security_group_ids      = var.security_group_ids
+  associate_public_ip_address = false
+
+  metadata_options {
+    http_endpoint = "enabled"
+    http_tokens   = "required"
+  }
+
+  root_block_device {
+    volume_type = "gp3"
+    volume_size = 8
+    encrypted   = true
+  }
+
+  tags = merge(var.tags, {
+    Name        = var.instance_name
+    Environment = var.environment
+    ManagedBy   = "Terraform"
+  })
+}
