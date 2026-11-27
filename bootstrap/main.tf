@@ -34,7 +34,7 @@ locals {
 # -----------------------------------------------------------------------------
 resource "aws_s3_bucket" "tf_state" {
   bucket        = local.bucket_name
-  force_destroy = false # Safety constraint: Protect production state from accidental deletion
+  force_destroy = true # Set to true for lab demo: Allows clean terraform destroy without BucketNotEmpty error
 
   lifecycle {
     prevent_destroy = false # Set to true in production
